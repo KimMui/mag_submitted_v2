@@ -68,6 +68,7 @@ SUBDIRS  += apbridge apbridge-unipro gpbridge
 SUBDIRS  += svc_power
 SUBDIRS  += pwm
 SUBDIRS  += gpio
+SUBDIRS  += i2s
 
 # Sub-directories that might need context setup.  Directories may need
 # context setup for a variety of reasons, but the most common is because
@@ -75,10 +76,12 @@ SUBDIRS  += gpio
 
 CNTXTDIRS = debug epm etm pwm svc unipro tca lg
 CNTXTDIRS += gpio
+CNTXTDIRS += i2s
 
 ifeq ($(CONFIG_NSH_BUILTIN_APPS),y)
 CNTXTDIRS += debug epm etm pwm svc unipro tca lg
 CNTXTDIRS += gpio
+CNTXTDIRS += i2s
 endif
 
 all: nothing
