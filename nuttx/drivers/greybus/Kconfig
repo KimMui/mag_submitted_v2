@@ -21,3 +21,9 @@ config GREYBUS_VIBRATOR
 	bool "Vibrator support"
 	select GPIO
 	default n
+
+config GREYBUS_I2S_PHY
+	bool "I2S PHY support"
+	select DEVICE_CORE
+	select LIB_RING_BUF
+	default n
