@@ -78,29 +78,33 @@ struct svc_interface_device_id {
 /*
  * Default routes used on BDB1B demo
  */
-#define DEV_ID_APB1              (1)
-#define DEV_ID_APB2              (2)
-#define DEV_ID_SPRING6           (8)
-#define DEMO_GPIO_APB1_CPORT     (0)
-#define DEMO_GPIO_APB2_CPORT     (5)
-#define DEMO_I2C_APB1_CPORT      (1)
-#define DEMO_I2C_APB2_CPORT      (4)
-#define DEMO_DSI_APB1_CPORT      (16)
-#define DEMO_DSI_APB2_CPORT      (16)
-#define DEMO_VIBRATOR_APB1_CPORT (2)
-#define DEMO_VIBRATOR_APB2_CPORT (3)
+#define DEV_ID_APB1             (1)
+#define DEV_ID_APB2             (2)
+#define DEV_ID_SPRING4          (6)
+#define DEV_ID_SPRING6          (8)
+#define DEMO_GPIO_APB1_CPORT    (0)
+#define DEMO_GPIO_APB2_CPORT    (5)
+#define DEMO_I2C_APB1_CPORT     (1)
+#define DEMO_I2C_APB2_CPORT     (4)
+#define DEMO_I2S_MGMT_APB1_CPORT (2)
+#define DEMO_I2S_MGMT_APB2_CPORT (6)
+#define DEMO_I2S_RX_APB1_CPORT   (3)
+#define DEMO_I2S_RX_APB2_CPORT   (7)
+#define DEMO_DSI_APB1_CPORT     (16)
+#define DEMO_DSI_APB2_CPORT     (16)
 
 /* Interface name to deviceID mapping table */
 static struct svc_interface_device_id devid[] = {
     { "apb1", DEV_ID_APB1 },
     { "apb2", DEV_ID_APB2 },
+    { "spring4", DEV_ID_SPRING4 },
     { "spring6", DEV_ID_SPRING6 },
 };
 
 /* Connections table */
 static struct unipro_connection conn[] = {
 #if defined(CONFIG_SVC_ROUTE_DEFAULT)
-    // APB1, CPort 0 <-> APB2, CPort 5, for GPIO
+    // APB1, CPort 0 <-> SPRING4, CPort 5, for GPIO
     {
         .device_id0 = DEV_ID_APB1,
         .cport_id0  = DEMO_GPIO_APB1_CPORT,
@@ -116,12 +120,20 @@ static struct unipro_connection conn[] = {
         .cport_id1  = DEMO_I2C_APB2_CPORT,
         .flags      = CPORT_FLAGS_CSD_N | CPORT_FLAGS_CSV_N
     },
-    // APB1, CPort 2 <-> APB2, CPort 3, for Vibrator
+    // APB1, CPort 1 <-> APB2, CPort 6, for I2S MGMT
     {
         .device_id0 = DEV_ID_APB1,
-        .cport_id0  = DEMO_VIBRATOR_APB1_CPORT,
+        .cport_id0  = DEMO_I2S_MGMT_APB1_CPORT,
         .device_id1 = DEV_ID_APB2,
-        .cport_id1  = DEMO_VIBRATOR_APB2_CPORT,
+        .cport_id1  = DEMO_I2S_MGMT_APB2_CPORT,
+        .flags      = CPORT_FLAGS_CSD_N | CPORT_FLAGS_CSV_N
+    },
+    // APB1, CPort 1 <-> APB2, CPort 7, for I2S RX
+    {
+        .device_id0 = DEV_ID_APB1,
+        .cport_id0  = DEMO_I2S_RX_APB1_CPORT,
+        .device_id1 = DEV_ID_APB2,
+        .cport_id1  = DEMO_I2S_RX_APB2_CPORT,
         .flags      = CPORT_FLAGS_CSD_N | CPORT_FLAGS_CSV_N
     },
     // APB1, CPort 16 <-> APB2, CPort 16, for DSI
