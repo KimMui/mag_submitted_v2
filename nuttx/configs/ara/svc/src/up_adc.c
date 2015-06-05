@@ -1,4 +1,4 @@
-/*
+/**
  * arch/arm/src/stm32/stm32_adc.c
  *
  *   Copyright (C) 2011, 2013 Gregory Nutt. All rights reserved.

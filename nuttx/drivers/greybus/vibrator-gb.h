@@ -1,4 +1,4 @@
-/*
+/**
  * Copyright (c) 2015 Google Inc.
  * All rights reserved.
  * Author: Eli Sennesh <esennesh@leaflabs.com>
