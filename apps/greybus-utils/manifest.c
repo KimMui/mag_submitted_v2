@@ -201,10 +201,18 @@ static int identify_descriptor(struct greybus_descriptor *desc, size_t size,
     case GREYBUS_TYPE_CPORT:
         expected_size += sizeof(struct greybus_descriptor_cport);
         if (desc_size >= expected_size) {
+#ifdef CONFIG_GREYBUS_I2S_DUAL_PORTS
             if (!release) {
-                cport = alloc_cport();
+#else
+            // *.nmfs might have bundle other than 0, we only handle the one with bundle set to 0.
+            if (!release && !desc->cport.bundle) {
+#endif
+            	cport = alloc_cport();
                 cport->id = desc->cport.id;
                 cport->protocol = desc->cport.protocol_id;
+#ifdef CONFIG_GREYBUS_I2S_DUAL_PORTS
+                cport->bundle = desc->cport.bundle;
+#endif
                 gb_debug("cport_id = %d\n", cport->id);
             } else {
                 free_cport(desc->cport.id);
@@ -366,3 +374,35 @@ void enable_manifest(char *name, void *priv)
         gb_error("missing manifest blob, no hotplug event sent\n");
     }
 }
+
+#ifdef CONFIG_GREYBUS_I2S_DUAL_PORTS
+int get_cport_bundle(int cport)
+{
+#if 0
+    int i = 0;
+    while (i < CPORT_MAX) {
+        if ((g_greybus.cports_bmp & (1 << i)) != 0) {
+        	if (g_greybus.cports[i].id == cport) {
+        		return g_greybus.cports[i].bundle;
+        	}
+        }
+        i++;
+    }
+
+    return -1;
+#else
+    struct list_head *iter;
+    struct gb_cport *gb_cport;
+    int    bundle = 0;
+
+    list_foreach(&g_greybus.cports, iter) {
+        gb_cport = list_entry(iter, struct gb_cport, list);
+        if (gb_cport->id == cport) {
+            bundle = gb_cport->bundle;
+        }
+    }
+
+    return bundle;
+#endif
+}
+#endif

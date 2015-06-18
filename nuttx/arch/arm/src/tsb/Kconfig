@@ -89,6 +89,12 @@ config ARCH_CHIP_DEVICE_PLL
 	bool
 	default n
 
+config ARCH_CHIP_SYSTICK_RELOAD
+    int "System Time Tick Reload value"
+    default 960000
+    ---help---
+        In the "normal" configuration where system time tick reload value is 960000
+                
 config ARCH_CHIP_TSB_PLL
 	bool "PLL Support"
 	depends on ARCH_CHIP_GPBRIDGE
