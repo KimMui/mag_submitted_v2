@@ -35,6 +35,9 @@ struct gb_cport {
     struct list_head list;
     int id;
     int protocol;
+#ifdef CONFIG_GREYBUS_I2S_DUAL_PORTS
+    int bundle;
+#endif
 };
 
 void foreach_manifest(void (manifest_handler)(unsigned char *manifest_file, int manifest_number));

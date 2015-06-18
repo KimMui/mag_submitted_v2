@@ -72,6 +72,36 @@
 
 #include "i2s-gb.h"
 
+#if 0
+// These environments are defined in make file already, they should be removed!!!
+// We added them here so ECLIPSE can show which part of code is ifdefed out.
+
+#ifndef CONFIG_GREYBUS_I2S_UPSCALE
+#define CONFIG_GREYBUS_I2S_UPSCALE
+#endif
+
+#ifndef CONFIG_GREYBUS_I2S_DUAL_PORTS
+#define CONFIG_GREYBUS_I2S_DUAL_PORTS
+#endif
+// #define DISABLE_TRANSMIT
+#endif
+
+#ifdef CONFIG_GREYBUS_I2S_DUAL_PORTS
+#define USE_THREAD_FOR_I2S_RB
+#endif
+
+#if 0
+#undef  CONFIG_GREYBUS_I2S_UPSCALE
+#undef CONFIG_GREYBUS_I2S_DUAL_PORTS
+#undef USE_THREAD_FOR_I2S_RB
+#endif
+
+#ifdef CONFIG_GREYBUS_I2S_UPSCALE
+#include "rescale_pcm.h"
+#endif
+
+
+
 #define GB_I2S_VERSION_MAJOR            0
 #define GB_I2S_VERSION_MINOR            1
 
@@ -97,6 +127,10 @@
 #define GB_I2S_FLAG_TX_STARTED          BIT(4)
 #define GB_I2S_FLAG_TX_DELAYING         BIT(5)
 
+#ifdef CONFIG_GREYBUS_I2S_DUAL_PORTS
+#define GB_I2S_FLAG_MIXER_STARTED       BIT(7)
+#endif
+
 #ifndef SIGKILL
 #define SIGKILL     9
 #endif
@@ -121,10 +155,45 @@ struct gb_i2s_cport_list_entry {
     enum gb_i2s_cport_state state;
 };
 
+#ifdef CONFIG_GREYBUS_I2S_UPSCALE
+#define I2S_OUTPUT_SAMPLE_RATE          48000
+#endif
+
+#ifdef CONFIG_GREYBUS_I2S_DUAL_PORTS
+#define GB_I2S_BUNDLE_1_ID              1
+#define GB_I2S_BUNDLE_1_DEV_ID          1
+
+#define MIXER_I2S_MSG_SIZE				192
+#define MIXER_SAMPLES_PER_FRAME         (MIXER_I2S_MSG_SIZE >> 2) // left and right and 2 bytes sample
+// We fake it for now.
+#define SAMPLES_PER_MESSAGE             8
+#define NUMBER_OF_AUDIO_CHANNELS	    2
+#define DATA_SIZE_PER_SAMPLE            2
+
+
+extern int get_cport_bundle(int cport);
+
+#define MAX_AUDIO_CHANNELS			2
+enum gb_mixer_op_type {
+    GB_I2S_INSERT_AUDIO_FRAME,
+    GB_I2S_MIX_AUDIO_CHANNELS,
+};
+#endif
+
+
 struct gb_i2s_info { /* One per I2S Bundle */
     uint16_t            mgmt_cport;
     uint32_t            flags;
+#ifndef CONFIG_GREYBUS_I2S_DUAL_PORTS
     struct device       *dev;
+#else
+    int                 channel_id;
+#endif
+#ifdef CONFIG_GREYBUS_I2S_UPSCALE
+	STREAM_HANDLE       stream_handle;
+	unsigned int        output_samples_size;
+    uint32_t            rx_rb_mixing_count;
+#endif
     uint32_t            delay;
     uint32_t            sample_frequency;
     uint16_t            samples_per_message;
@@ -138,12 +207,18 @@ struct gb_i2s_info { /* One per I2S Bundle */
     struct list_head    cport_list;
     struct ring_buf     *rx_rb;
     uint32_t            rx_rb_count;
+#ifndef DISABLE_TRANSMIT
     struct ring_buf     *tx_rb;
     sem_t               active_cports_lock;
     sem_t               tx_rb_sem;
     atomic_t            tx_rb_count;
     pthread_t           tx_rb_thread;
     WDOG_ID             tx_wdog;
+#endif
+
+    /* XXX temporary */
+    uint32_t                    rx_rb_underrun_count;
+    uint32_t                    rx_packet_count;
 };
 
 struct gb_i2s_dev_info {
@@ -153,12 +228,72 @@ struct gb_i2s_dev_info {
     struct gb_i2s_info  *info;
 };
 
+#ifdef CONFIG_GREYBUS_I2S_DUAL_PORTS
+struct gb_audio_channel_info {
+	struct gb_i2s_info  *channel_info;
+	struct ring_buf     *rx_rb;
+};
+
+struct gb_mixer_info {
+    uint32_t                    flags;
+    struct device               *dev;
+    struct ring_buf             *rx_rb;
+    unsigned int                msg_data_size;
+
+    struct gb_i2s_configuration config;
+
+    atomic_t                    rx_channel_count;
+    atomic_t                    active_rx_channel_count;
+    atomic_t                    total_channel_count;
+
+
+#ifdef USE_THREAD_FOR_I2S_RB
+    sem_t                       rx_rb_sem;
+    sem_t                       rx_stop_sem;
+    pthread_t                   rx_rb_thread;
+    int                         rx_thread_terminate;
+#endif
+
+    /* XXX temporary */
+    uint32_t                    rx_rb_count;
+    uint32_t                    rx_rb_total_count;
+    uint32_t                    rx_rb_underrun_count;
+
+    struct gb_audio_channel_info audio_channels[MAX_AUDIO_CHANNELS];
+};
+
+static struct gb_mixer_info gb_mixer = {
+    .flags             = 0,
+    .dev               = NULL,
+	.rx_rb             = NULL,
+#ifdef CONFIG_GREYBUS_I2S_UPSCALE
+	.msg_data_size     = MIXER_I2S_MSG_SIZE,
+#endif
+	.rx_rb_count       = 0,
+	.rx_rb_total_count = 0,
+	.rx_rb_underrun_count = 0,
+	.rx_channel_count     = 0,
+	.total_channel_count  = 0,
+#ifdef USE_THREAD_FOR_I2S_RB
+	.rx_thread_terminate   = 1,
+#endif
+};
+#endif
+
+
 static struct gb_i2s_dev_info gb_i2s_dev_info_map[] = {
     {
         .bundle_id  = GB_I2S_BUNDLE_0_ID,
         .dev_type   = DEVICE_TYPE_I2S_HW,
         .dev_id     = GB_I2S_BUNDLE_0_DEV_ID,
     },
+#ifdef CONFIG_GREYBUS_I2S_DUAL_PORTS
+    {
+        .bundle_id  = GB_I2S_BUNDLE_1_ID,
+        .dev_type   = DEVICE_TYPE_I2S_HW,
+        .dev_id     = GB_I2S_BUNDLE_1_DEV_ID,
+    }
+#endif
 };
 
 static struct gb_i2s_dev_info *gb_i2s_get_dev_info(uint16_t bundle_id)
@@ -257,9 +392,25 @@ static void gb_i2s_ll_tx(struct gb_i2s_info *info, uint8_t *data)
      * susbystem reuses the buffer immediately and the data may
      * not be sent out yet.
      */
+#ifdef CONFIG_GREYBUS_I2S_UPSCALE
+    uint32_t  number_of_input_samples = info->samples_per_message;
+    uint32_t  number_of_output_samples = (info->output_samples_size >> 2);
+
+    // lldbg("=> %d, %d.\n", number_of_input_samples, number_of_output_samples);
+    upscale_engine_resample_copy(info->stream_handle,
+    		                     (int16_t *)data,
+								 &number_of_input_samples,
+								 (int16_t *)ring_buf_get_tail(info->rx_rb),
+								 &number_of_output_samples);
+
+    // lldbg("==> %d, %d.\n", number_of_input_samples, number_of_output_samples);
+    ring_buf_put(info->rx_rb, (number_of_output_samples << 2));
+#else
     memcpy(ring_buf_get_tail(info->rx_rb), data, info->msg_data_size);
 
     ring_buf_put(info->rx_rb, info->msg_data_size);
+#endif
+
     ring_buf_pass(info->rx_rb);
 
     info->next_rx_sample += info->samples_per_message;
@@ -268,6 +419,7 @@ static void gb_i2s_ll_tx(struct gb_i2s_info *info, uint8_t *data)
     info->rx_rb_count++;
 }
 
+#ifndef CONFIG_GREYBUS_I2S_DUAL_PORTS
 /* Callback for low-level i2s transmit operations (GB receives) */
 static void gb_i2s_ll_tx_cb(struct ring_buf *rb,
                             enum device_i2s_event event, void *arg)
@@ -280,8 +432,10 @@ static void gb_i2s_ll_tx_cb(struct ring_buf *rb,
         info->rx_rb_count--;
 
         /* TODO: Replace with smarter underrun prevention */
-        if (info->rx_rb_count < 2)
+        if (info->rx_rb_count < 2) {
             gb_i2s_ll_tx(info, info->dummy_data);
+            info->rx_rb_underrun_count++;
+        }
 
         break;
     case DEVICE_I2S_EVENT_UNDERRUN:
@@ -305,19 +459,281 @@ static void gb_i2s_ll_tx_cb(struct ring_buf *rb,
 
     if (gb_event) {
         gb_i2s_report_event(info, gb_event);
+        /* All events are halt streaming right now */
+        gb_i2s_report_event(info, GB_I2S_EVENT_HALT);
+    }
+}
+#else
+static void gb_i2s_mixer_report_event(uint32_t event)
+{
+	int    index;
+
+	for (index = 0; index < MAX_AUDIO_CHANNELS; index++) {
+		struct gb_i2s_info *info = gb_mixer.audio_channels[index].channel_info;
+
+		if (info != NULL) {
+			gb_i2s_report_event(info, event);
+		}
+	}
+}
+
+static uint8_t gb_mixer_start_transmitter(enum gb_mixer_op_type op_type);
+
+static void gb_i2s_mixer_ll_tx_cb(struct ring_buf *rb,
+                                  enum device_i2s_event event, void *arg)
+{
+    struct gb_i2s_info *info = arg;
+    uint32_t gb_event = 0;
+
+    switch (event) {
+    case DEVICE_I2S_EVENT_TX_COMPLETE:
+        /* ring_buf_reset(rb); will be called in gb_i2s_ll_tx() */
+        /* should have been called by driver too */
+
+        gb_mixer.rx_rb_count--;
+
+        if (gb_mixer.rx_rb_count == 0) { /* XXX */
+            gb_mixer_start_transmitter(GB_I2S_INSERT_AUDIO_FRAME);
+        } else {
+        	if (gb_mixer.rx_rb_count < (GB_I2S_RX_RING_BUF_PAD >> 1)) {
+#ifdef USE_THREAD_FOR_I2S_RB
+        		sem_post(&gb_mixer.rx_rb_sem);
+#else
+        		gb_mixer_start_transmitter(GB_I2S_MIX_AUDIO_CHANNELS);
+#endif
+           	}
+        }
+        break;
+    case DEVICE_I2S_EVENT_UNDERRUN:
+    	gb_mixer.flags &= ~GB_I2S_FLAG_RX_STARTED;
+#ifdef USE_THREAD_FOR_I2S_RB
+   		sem_post(&gb_mixer.rx_rb_sem);
+#else
+   		gb_mixer_start_transmitter(GB_I2S_MIX_AUDIO_CHANNELS);
+#endif
+        gb_event = GB_I2S_EVENT_UNDERRUN;
+        break;
+    case DEVICE_I2S_EVENT_OVERRUN:
+        gb_event = GB_I2S_EVENT_OVERRUN;
+        break;
+    case DEVICE_I2S_EVENT_CLOCKING:
+        gb_event = GB_I2S_EVENT_CLOCKING;
+        break;
+    case DEVICE_I2S_EVENT_DATA_LEN:
+        gb_event = GB_I2S_EVENT_DATA_LEN;
+        break;
+    case DEVICE_I2S_EVENT_UNSPECIFIED:
+        gb_event = GB_I2S_EVENT_UNSPECIFIED;
+        break;
+    default:
+        gb_event = GB_I2S_EVENT_INTERNAL_ERROR;
+    }
+
+    if (gb_event) {
+// lldbg("--- event = %d from driver!!!\n", event);
+lldbg("event=%d, (%d, %d) (%d, %d)!!!\n", event, gb_mixer.rx_rb_count, gb_mixer.rx_rb_total_count, info->rx_rb_count, info->next_rx_sample);
+        gb_i2s_report_event(info, gb_event);
         /* All driver error events halt streaming right now */
         gb_i2s_report_event(info, GB_I2S_EVENT_HALT);
     }
 }
 
+#ifdef USE_THREAD_FOR_I2S_RB
+static void *gb_i2s_mixer_rb_thread(void *data)
+{
+	int ret = 0;
+
+	lldbg("started(id=%d).\n", pthread_self());
+
+	while (!gb_mixer.rx_thread_terminate)
+	{
+		sem_wait(&gb_mixer.rx_rb_sem);
+
+		if (gb_mixer.rx_thread_terminate)
+		{
+			break;
+		}
+
+		gb_mixer_start_transmitter(GB_I2S_MIX_AUDIO_CHANNELS);
+
+     	ret = device_i2s_start_transmitter(gb_mixer.dev);
+
+     	if (ret) {
+	        gb_i2s_mixer_report_event(GB_I2S_EVENT_FAILURE);
+	        gb_i2s_mixer_report_event(GB_I2S_EVENT_HALT);
+	    	lldbg(" failed to start I2S HW(ret=%d)!!!\n", ret);
+        }
+
+        gb_mixer.flags |= GB_I2S_FLAG_RX_STARTED;
+	}
+
+	lldbg("ended!!!\n");
+
+	sem_post(&gb_mixer.rx_stop_sem);
+
+	return NULL;
+}
+
+static int gb_i2s_start_audio_mixer(void)
+{
+	int ret = 0;
+#if 0
+    struct sched_param sparam;
+    int prio_min;
+    int prio_max;
+    int prio_mid;
+    pthread_attr_t attr;
+
+    ret = pthread_attr_init(&attr);
+	if (ret != OK) {
+	    lldbg("ERROR: pthread_attr_init failed, ret=%d\n", ret);
+		gb_mixer.rx_thread_terminate = 1;
+		return ret;
+	}
+
+	sem_init(&gb_mixer.rx_rb_sem, 0, 0);
+	sem_init(&gb_mixer.rx_stop_sem, 0, 0);
+	gb_mixer.rx_thread_terminate = 0;
+
+    prio_min = sched_get_priority_min(SCHED_FIFO);
+    prio_max = sched_get_priority_max(SCHED_FIFO);
+    prio_mid = (prio_min + prio_max) / 2;
+
+    sched_getparam(0, &sparam);
+    lldbg("===>%d\n", sparam.sched_priority);
+
+    sparam.sched_priority = (prio_mid + prio_max) / 2;
+    ret = pthread_attr_setschedparam(&attr, &sparam);
+    if (ret != OK) {
+        lldbg("ERROR: pthread_attr_setschedparam failed, ret=%d\n",  ret);
+    } else {
+        lldbg("Set thread priority to %d(%d, %d)\n", sparam.sched_priority, prio_min, prio_max);
+    }
+
+	ret = pthread_create(&gb_mixer.rx_rb_thread, &attr, gb_i2s_mixer_rb_thread, NULL);
+#else
+
+	sem_init(&gb_mixer.rx_rb_sem, 0, 0);
+	sem_init(&gb_mixer.rx_stop_sem, 0, 0);
+
+	gb_mixer.rx_thread_terminate = 0;
+
+	ret = pthread_create(&gb_mixer.rx_rb_thread, NULL, gb_i2s_mixer_rb_thread, NULL);
+#endif
+
+	if (ret) {
+        lldbg("ERROR: failed to start mixer thread, ret=%d\n",  ret);
+		gb_mixer.rx_thread_terminate = 1;
+	} else {
+		gb_mixer.flags |= GB_I2S_FLAG_MIXER_STARTED;
+	}
+
+	return ret;
+}
+#endif
+
+static int gb_i2s_mixer_prepare_receiver(struct gb_i2s_info *info, unsigned int entries)
+{
+	int ret        = 0;
+    int channel_id = 0;
+    int number_of_rx_channels = atomic_inc(&gb_mixer.rx_channel_count);
+
+    if ((number_of_rx_channels > MAX_AUDIO_CHANNELS) || (number_of_rx_channels < 0)) {
+        lldbg("Total number of channels = %d.\n", number_of_rx_channels);
+    	atomic_dec(&gb_mixer.rx_channel_count);
+        return GB_OP_MALFUNCTION;
+    }
+
+    for (channel_id = 0; channel_id < MAX_AUDIO_CHANNELS; channel_id++) {
+//      lldbg(" channel = %d, (%x).\n", channel_id, gb_mixer.audio_channels[channel_id].channel_info);
+        if (!gb_mixer.audio_channels[channel_id].channel_info) {
+            gb_mixer.audio_channels[channel_id].channel_info = info;
+            gb_mixer.audio_channels[channel_id].rx_rb = info->rx_rb;
+
+            info->channel_id = channel_id;
+            break;
+        }
+    }
+
+    if (channel_id == MAX_AUDIO_CHANNELS) {
+        lldbg(" not available channel(channel = %d).\n", channel_id);
+    	atomic_dec(&gb_mixer.rx_channel_count);
+        return GB_OP_MALFUNCTION;
+    }
+
+//  lldbg(" channel = %d.\n", channel_id);
+
+    //if (!(gb_mixer.flags & GB_I2S_FLAG_RX_PREPARED)) {
+    if (number_of_rx_channels == 1) {
+#ifndef CONFIG_GREYBUS_I2S_UPSCALE
+        gb_mixer.msg_data_size = info->msg_data_size;
+#else
+        /* (sample_freq / samples_per_msg) * (delay_in_us / 1,000,000) */
+        //entries = ((I2S_OUTPUT_SAMPLE_RATE * info->delay) /
+        //           (MIXER_SAMPLES_PER_FRAME * 1000000)) +
+        //           GB_I2S_RX_RING_BUF_PAD;
+        entries = GB_I2S_RX_RING_BUF_PAD;
+        gb_mixer.msg_data_size = MIXER_I2S_MSG_SIZE;
+#endif
+
+//        lldbg(" entries=%d, size=%d, fr=%d, dl=%d, spm=%d\n",
+//    	    	entries, gb_mixer.msg_data_size, info->sample_frequency, info->delay, info->samples_per_message);
+
+        gb_mixer.rx_rb = ring_buf_alloc_ring(entries,
+                                        sizeof(struct gb_operation_hdr) +
+                                        sizeof(struct gb_i2s_send_data_request),
+                                        gb_mixer.msg_data_size, 0, NULL, NULL, NULL);
+
+        if (!gb_mixer.rx_rb) {
+        	ret = GB_OP_NO_MEMORY;
+        }
+
+    	gb_mixer.flags &= ~GB_I2S_FLAG_MIXER_STARTED;
+    	gb_mixer.flags &= ~GB_I2S_FLAG_RX_PREPARED;
+    	gb_mixer.flags &= ~GB_I2S_FLAG_RX_STARTED;
+
+  		gb_mixer.rx_rb_count = 0;
+    	gb_mixer.rx_rb_underrun_count = 0;
+    	gb_mixer.rx_rb_total_count = 0;
+
+#ifdef USE_THREAD_FOR_I2S_RB
+		if (!ret) {
+    	    ret = gb_i2s_start_audio_mixer();
+        }
+#endif
+    }
+
+    if (ret)
+    {
+        gb_mixer.audio_channels[channel_id].channel_info = NULL;
+        gb_mixer.audio_channels[channel_id].rx_rb = NULL;
+
+		if (gb_mixer.rx_rb == NULL) {
+			ring_buf_free_ring(gb_mixer.rx_rb, NULL, NULL);
+    		gb_mixer.rx_rb = NULL;
+		}
+
+        lldbg(" failed to allocate RB or start thread!\n");
+
+        atomic_dec(&gb_mixer.rx_channel_count);
+    }
+
+    return ret;
+}
+
+#endif
+
+
+
 static int gb_i2s_prepare_receiver(struct gb_i2s_info *info)
 {
     unsigned int entries;
-    int ret;
+    int ret = 0;
 
     if (info->flags & GB_I2S_FLAG_RX_PREPARED)
         return -EPROTO;
 
+#ifndef CONFIG_GREYBUS_I2S_UPSCALE
     /* (sample_freq / samples_per_msg) * (delay_in_us / 1,000,000) */
     entries = ((info->sample_frequency * info->delay) /
                (info->samples_per_message * 1000000)) +
@@ -327,12 +743,91 @@ static int gb_i2s_prepare_receiver(struct gb_i2s_info *info)
                                       sizeof(struct gb_operation_hdr) +
                                         sizeof(struct gb_i2s_send_data_request),
                                       info->msg_data_size, 0, NULL, NULL, NULL);
-    if (!info->rx_rb)
+#else
+    uint32_t sample_frequency = info->sample_frequency;
+	// uint32_t sample_frequency = FAKE_INPUT_SAMPLE_RATE;
+    uint32_t output_samples_per_frame  = 0;
+
+    STREAM_HANDLE stream_handle = upscale_engine_init();
+
+  	if (stream_handle == NULL) {
+   		ret = GB_OP_NO_MEMORY;
+   	} else {
+   		if(upscale_engine_set_current_sample_rate(stream_handle, sample_frequency, 2) != RESCALE_PCM_OK) {
+   			lldbg(" failed to set sample rate.\n");
+   			upscale_engine_deinit(stream_handle);
+   			ret = GB_OP_MALFUNCTION;
+   		} else {
+   			info->stream_handle = stream_handle;
+   		}
+    }
+
+  	if (!ret)
+  	{
+        ret = upscale_engine_calc_output_buffer_size(info->stream_handle,
+        		                                     info->samples_per_message,
+												     &output_samples_per_frame);
+        if (ret != RESCALE_PCM_OK)
+        {
+        	lldbg(" failed to calculate up-sampling output size(ret=%d).\n", ret);
+            ret = GB_OP_MALFUNCTION;
+        }
+  	}
+
+    if (ret)
+    {
+    	ring_buf_free_ring(info->rx_rb, NULL, NULL);
+    	info->rx_rb = NULL;
+
+    	return ret;
+    }
+
+    /* (sample_freq / samples_per_msg) * (delay_in_us / 1,000,000) */
+    entries = ((sample_frequency * info->delay) /
+               (info->samples_per_message * 1000000)) +
+               GB_I2S_RX_RING_BUF_PAD;
+
+#if 1
+    lldbg(" input_size=%d, input_fr=%d, input_dl=%d, input_spm=%d\n",
+    		info->msg_data_size, info->sample_frequency, info->delay, info->samples_per_message);
+    lldbg(" entries=%d, output_size=%d, output_fr=%d, output_dl=%d, output_spm=%d\n",
+    		entries, output_samples_per_frame << 2, I2S_OUTPUT_SAMPLE_RATE, info->delay, output_samples_per_frame);
+#endif
+
+    info->rx_rb = ring_buf_alloc_ring(entries,
+                                      sizeof(struct gb_operation_hdr) +
+                                      sizeof(struct gb_i2s_send_data_request),
+									  output_samples_per_frame << 2, 0, NULL, NULL, NULL);
+
+    info->output_samples_size = (info->rx_rb) ? output_samples_per_frame << 2 : 0;
+#endif
+    if (!info->rx_rb) {
+    	lldbg("Out of memory.\n");
         return -ENOMEM;
+    }
 
     /* Greybus i2s message receiver is local i2s transmitter */
+#ifndef CONFIG_GREYBUS_I2S_DUAL_PORTS
     ret = device_i2s_prepare_transmitter(info->dev, info->rx_rb,
                                          gb_i2s_ll_tx_cb, info);
+#else
+  	ret = gb_i2s_mixer_prepare_receiver(info, entries);
+
+//  	lldbg("=1==> %d, %d\n", ret, gb_mixer.flags);
+    if (!ret && !(gb_mixer.flags & GB_I2S_FLAG_RX_PREPARED)) {
+//      	lldbg("=2==>\n");
+        ret = device_i2s_prepare_transmitter(gb_mixer.dev, gb_mixer.rx_rb,
+        	    gb_i2s_mixer_ll_tx_cb, info);
+
+        if (ret) {
+        	lldbg("failed to start i2s transmitter.\n");
+            ring_buf_free_ring(gb_mixer.rx_rb, NULL, NULL);
+        	gb_mixer.rx_rb = NULL;
+        } else {
+        	gb_mixer.flags |= GB_I2S_FLAG_RX_PREPARED;
+        }
+    }
+#endif
     if (ret) {
         ring_buf_free_ring(info->rx_rb, NULL, NULL);
         info->rx_rb = NULL;
@@ -345,6 +840,7 @@ static int gb_i2s_prepare_receiver(struct gb_i2s_info *info)
     return 0;
 }
 
+#ifndef CONFIG_GREYBUS_I2S_DUAL_PORTS
 static uint8_t gb_i2s_receiver_send_data_req_handler(
                                                 struct gb_operation *operation)
 {
@@ -381,9 +877,13 @@ static uint8_t gb_i2s_receiver_send_data_req_handler(
     /* Fill in any missing data */
     while (ring_buf_is_producers(info->rx_rb) &&
            (le32_to_cpu(request->sample_number) > info->next_rx_sample))
+    {
+    	lldbg("==> %d, %d\n", request->sample_number, info->next_rx_sample);
         gb_i2s_ll_tx(info, info->dummy_data);
+    }
 
     gb_i2s_ll_tx(info, request->data);
+    info->rx_packet_count++;
 
     irqrestore(flags);
 
@@ -401,6 +901,442 @@ err_exit:
 
     return GB_OP_SUCCESS;
 }
+#else
+
+#if 1
+static unsigned int gb_mixer_get_available_audio_samples(
+	struct gb_audio_channel_info *audio_channels[],
+	unsigned int *avail_channels,
+	enum gb_mixer_op_type op_type)
+{
+	int index;
+	unsigned int number_of_samples = gb_mixer.msg_data_size;
+	struct gb_audio_channel_info *audio_channel;
+
+	*avail_channels = 0;
+	for (index = 0; index < MAX_AUDIO_CHANNELS; index++) {
+		audio_channel = &gb_mixer.audio_channels[index];
+
+		if (audio_channel->channel_info != NULL) {
+			if (!(audio_channel->channel_info->flags & GB_I2S_FLAG_RX_STARTED)) {
+				continue;
+			}
+
+		    if (ring_buf_is_consumers(audio_channel->rx_rb)) {
+			   unsigned int rb_avail_samples;
+
+			   audio_channels[*avail_channels] = audio_channel;
+			   rb_avail_samples = ring_buf_len(audio_channels[*avail_channels]->rx_rb);
+			   if (number_of_samples > rb_avail_samples) {
+				   number_of_samples = rb_avail_samples;
+			   }
+			   (*avail_channels)++;
+		   } else {
+			   if (op_type == GB_I2S_INSERT_AUDIO_FRAME){
+			       // gb_i2s_report_event(audio_channel->channel_info, GB_I2S_EVENT_UNDERRUN);
+			       audio_channel->channel_info->rx_rb_underrun_count++;
+			   }
+		   }
+	   }
+	}
+
+	if (*avail_channels == 0) {
+		number_of_samples = 0;
+	}
+
+    return number_of_samples;
+}
+
+
+static int gb_mixer_ring_buf_get_next(
+    struct gb_audio_channel_info *audio_channels[],
+  	unsigned int avail_channels,
+	unsigned int samples_count,
+	struct ring_buf *src_rb[])
+{
+    int index;
+
+    for (index = 0; index < avail_channels; index++)
+    {
+    	src_rb[index] = audio_channels[index]->rx_rb;
+        if (ring_buf_len(audio_channels[index]->rx_rb) <= samples_count) {
+        	audio_channels[index]->rx_rb = ring_buf_get_next(audio_channels[index]->rx_rb);
+        	audio_channels[index]->channel_info->rx_rb_count--;
+
+        	if (avail_channels != 1) {
+        		audio_channels[index]->channel_info->rx_rb_mixing_count++;
+        	}
+        }
+    }
+    return 0;
+}
+
+static int gb_mixer_mix_audio_channels(
+	struct ring_buf *dest_rb,
+	struct ring_buf *src_rb[],
+  	unsigned int src_channel_count,
+	unsigned int mixing_data_length)
+{
+    int sample_index  = 0;
+    int channel_index = 0;
+    uint16_t *dest = (uint16_t*)ring_buf_get_tail(dest_rb);
+    uint16_t *src[MAX_AUDIO_CHANNELS] = {NULL};
+
+    if (mixing_data_length & 0x3) {
+    	lldbg("Data length must be multiple of 4.\n");
+    	return 1;
+    }
+
+    for (channel_index = 0; channel_index < src_channel_count; channel_index++) {
+    	src[channel_index] = (uint16_t*)ring_buf_get_head(src_rb[channel_index]);
+    }
+
+    int sample_count  = mixing_data_length >> 2;
+    for (sample_index = 0; sample_index < sample_count; sample_index++)
+    {
+    	uint32_t output_sample = 0;
+
+        for (channel_index = 0; channel_index < src_channel_count; channel_index++) {
+        	output_sample += (uint32_t)le16_to_cpu(src[channel_index][sample_index]);
+        }
+
+        // TODO: Need to do better than this.
+        dest[sample_index] = (uint16_t)((output_sample + (src_channel_count >> 1)) / src_channel_count);
+    }
+
+    return 0;
+}
+
+static int gb_mixer_ring_buf_pull_and_pass(
+    struct ring_buf *src_rb[],
+  	unsigned int channel_count,
+  	unsigned int mixing_data_length
+	)
+{
+    int index;
+
+    for (index = 0; index < channel_count; index++)
+    {
+    	ring_buf_pull(src_rb[index], mixing_data_length);
+
+    	if (ring_buf_len(src_rb[index]) == 0) {
+        	ring_buf_pass(src_rb[index]);
+    	}
+    }
+    return 0;
+}
+
+static uint8_t gb_mixer_start_transmitter(enum gb_mixer_op_type op_type)
+{
+//    int ret;
+    int frames_sent = 0;
+    irqstate_t irq_flags      = 0;
+    struct ring_buf *dest_rb  = NULL;
+    //enum gb_mixer_op_type org_op_type = op_type;
+
+//lldbg("=> %d\n", op_type);
+	irq_flags = irqsave();
+    while (ring_buf_is_producers(dest_rb = gb_mixer.rx_rb))
+    {
+    	unsigned int mixing_data_length = 0;
+    	unsigned int avail_channels = 0;
+    	struct gb_audio_channel_info *audio_channels[MAX_AUDIO_CHANNELS] = {NULL};
+
+        // src_rb = gb_mixer.audio_channels[0].rx_rb;
+    	mixing_data_length = gb_mixer_get_available_audio_samples(&audio_channels[0],
+        		                                              &avail_channels,
+															  op_type);
+//if (op_type == GB_I2S_INSERT_AUDIO_FRAME) lldbg("===>%d, %d\n", mixing_data_length, avail_channels);
+    	// if (ring_buf_is_consumers(src_rb))
+        if ((mixing_data_length > 0) &&
+        	((avail_channels == gb_mixer.active_rx_channel_count) || (op_type == GB_I2S_INSERT_AUDIO_FRAME))) //(avail_channels > 0))
+    	{
+#if 1
+        	int output_buf_space;
+
+            gb_mixer.rx_rb = ring_buf_get_next(dest_rb);
+            gb_mixer.rx_rb_count++;
+            gb_mixer.rx_rb_total_count++;
+
+    		ring_buf_reset(dest_rb);
+            while (mixing_data_length && (output_buf_space = ring_buf_space(dest_rb)) > 0) {
+            	struct ring_buf *src_rb[MAX_AUDIO_CHANNELS]  = {NULL};
+
+            	if (output_buf_space < mixing_data_length) {
+            		mixing_data_length = output_buf_space;
+            	}
+
+                gb_mixer_ring_buf_get_next(&audio_channels[0],
+                		avail_channels,
+    					mixing_data_length,
+    					src_rb);
+
+                irqrestore(irq_flags);
+
+    		    if (avail_channels == 1) {
+        			//lldbg("copy %d bytes\n", mixing_data_length);
+        		    memcpy(ring_buf_get_tail(dest_rb), ring_buf_get_head(src_rb[0]), mixing_data_length);
+        		} else {
+        			gb_mixer_mix_audio_channels(dest_rb, &src_rb[0], avail_channels, mixing_data_length);
+        		}
+
+                ring_buf_put(dest_rb, mixing_data_length);
+
+                gb_mixer_ring_buf_pull_and_pass(&src_rb[0], avail_channels, mixing_data_length);
+
+                irq_flags = irqsave();
+
+                op_type = GB_I2S_MIX_AUDIO_CHANNELS;
+                mixing_data_length = gb_mixer_get_available_audio_samples(&audio_channels[0],
+                		                                              &avail_channels,
+        															  op_type);
+            }
+//            if (ring_buf_len(dest_rb) > 192) lldbg("===>%d\n", ring_buf_len(dest_rb));
+            ring_buf_pass(dest_rb);
+            irqrestore(irq_flags);
+
+            frames_sent++;
+#else
+        	struct ring_buf *src_rb[MAX_AUDIO_CHANNELS]  = {NULL};
+
+            gb_mixer.rx_rb = ring_buf_get_next(dest_rb);
+            gb_mixer_ring_buf_get_next(&audio_channels[0],
+            		avail_channels,
+					mixing_data_length,
+					src_rb);
+
+            gb_mixer.rx_rb_count++;
+            gb_mixer.rx_rb_total_count++;
+
+            irqrestore(irq_flags);
+
+    		ring_buf_reset(dest_rb);
+    		if (avail_channels == 1) {
+    			//lldbg("copy %d bytes\n", mixing_data_length);
+    		    memcpy(ring_buf_get_head(dest_rb), ring_buf_get_head(src_rb[0]), mixing_data_length);
+    		} else {
+    			gb_mixer_mix_audio_channels(dest_rb, &src_rb[0], avail_channels, mixing_data_length);
+    		}
+
+            ring_buf_put(dest_rb, mixing_data_length);
+            ring_buf_pass(dest_rb);
+
+            gb_mixer_ring_buf_pull_and_pass(&src_rb[0], avail_channels, mixing_data_length);
+
+        	irq_flags = irqsave();
+
+            frames_sent++;
+            op_type = GB_I2S_MIX_AUDIO_CHANNELS;
+#endif
+    	}
+    	else
+    	{
+            if ((frames_sent == 0) && (op_type == GB_I2S_INSERT_AUDIO_FRAME)) {
+            	gb_mixer.rx_rb = ring_buf_get_next(dest_rb);
+            	gb_mixer.rx_rb_count++;
+
+            	ring_buf_reset(dest_rb);
+            	memset(ring_buf_get_head(dest_rb), 0, gb_mixer.msg_data_size);
+                ring_buf_put(dest_rb, gb_mixer.msg_data_size);
+                ring_buf_pass(dest_rb);
+                frames_sent++;
+
+                gb_mixer.rx_rb_underrun_count++;
+            }
+    		break;
+    	}
+    }
+    irqrestore(irq_flags);
+
+#if 0
+    //if (frames_sent && !(gb_mixer.flags & GB_I2S_FLAG_RX_STARTED)) {
+    if (org_op_type == GB_I2S_MIX_AUDIO_CHANNELS) {
+    	ret = device_i2s_start_transmitter(gb_mixer.dev);
+
+    	if (ret) {
+            gb_i2s_mixer_report_event(GB_I2S_EVENT_FAILURE);
+            gb_i2s_mixer_report_event(GB_I2S_EVENT_HALT);
+    		lldbg(" failed to start I2S HW(ret=%d)!!!\n", ret);
+            return ret;
+        }
+
+        gb_mixer.flags |= GB_I2S_FLAG_RX_STARTED;
+    }
+#endif
+
+    return 0;
+}
+#else
+static uint8_t gb_mixer_start_transmitter(enum gb_mixer_op_type op_type)
+{
+    int ret;
+    int frame_sent = 0;
+    irqstate_t irq_flags      = 0;
+    int buffer_length         = 0;
+    struct ring_buf *dest_rb  = NULL;
+    struct ring_buf *src_rb   = NULL;
+
+	irq_flags = irqsave();
+
+    while (ring_buf_is_producers(dest_rb = gb_mixer.rx_rb))
+    {
+    	src_rb = gb_mixer.audio_channels[0].rx_rb;
+
+    	if (ring_buf_is_consumers(src_rb))
+    	{
+            gb_mixer.audio_channels[0].rx_rb = ring_buf_get_next(src_rb);
+            gb_mixer.rx_rb = ring_buf_get_next(dest_rb);
+
+            gb_mixer.rx_rb_count++;
+            gb_mixer.rx_rb_total_count++;
+
+            irqrestore(irq_flags);
+
+            buffer_length = ring_buf_len(src_rb);
+
+    		ring_buf_reset(dest_rb);
+    		memcpy(ring_buf_get_head(dest_rb), ring_buf_get_head(src_rb), buffer_length);
+
+            ring_buf_put(dest_rb, buffer_length);
+
+            ring_buf_pass(src_rb);
+            ring_buf_pass(dest_rb);
+
+        	irq_flags = irqsave();
+            frame_sent++;
+    	}
+    	else
+    	{
+            if ((frame_sent == 0) && (op_type == GB_I2S_INSERT_AUDIO_FRAME)) {
+            	gb_mixer.rx_rb = ring_buf_get_next(dest_rb);
+            	gb_mixer.rx_rb_count++;
+
+            	ring_buf_reset(dest_rb);
+                ring_buf_put(dest_rb, gb_mixer.msg_data_size);
+                ring_buf_pass(dest_rb);
+                frame_sent++;
+            }
+
+    		break;
+    	}
+    }
+    irqrestore(irq_flags);
+
+    if (frame_sent != 0) {
+    	ret = device_i2s_start_transmitter(gb_mixer.dev);
+
+    	if (ret) {
+            //gb_i2s_report_event(info, GB_I2S_EVENT_FAILURE);
+            //gb_i2s_report_event(info, GB_I2S_EVENT_HALT);
+            gb_i2s_mixer_report_event(GB_I2S_EVENT_FAILURE);
+            gb_i2s_mixer_report_event(GB_I2S_EVENT_HALT);
+
+    		lldbg(" failed to start I2S HW(ret=%d)!!!\n", ret);
+            return ret;
+        }
+
+        gb_mixer.flags |= GB_I2S_FLAG_RX_STARTED;
+    }
+
+    return 0;
+}
+#endif
+
+static uint8_t gb_i2s_receiver_send_data_req_handler(
+                                                struct gb_operation *operation)
+{
+#ifndef USE_THREAD_FOR_I2S_RB
+    int ret = 0;
+#endif
+    struct gb_i2s_send_data_request *request = gb_operation_get_request_payload(operation);
+    struct gb_i2s_info *info;
+
+    info = gb_i2s_get_info_by_cport(operation->cport);
+    if (!info || !(info->flags & GB_I2S_FLAG_RX_PREPARED)) {
+        gb_i2s_report_event(info, GB_I2S_EVENT_PROTOCOL_ERROR);
+        return 0;
+    }
+
+    // while (info->rx_rb_count >= 7) lldbg("==>\n");
+
+    sem_wait(&info->active_cports_lock);
+
+    if (!info->active_rx_cports)
+        goto err_exit;
+
+    // lldbg("===> cport=%d, sn=%d sz=%d(msgdatasz=%d).\n", operation->cport, request->sample_number, request->size, info->msg_data_size);
+
+    if (le32_to_cpu(request->size) != info->msg_data_size) {
+    	lldbg("data length error: reqSize=%d, dataSize=%d\n", request->size, info->msg_data_size);
+        gb_i2s_report_event(info, GB_I2S_EVENT_DATA_LEN);
+        goto err_exit;
+    }
+
+
+    if (!ring_buf_is_producers(info->rx_rb)) {
+		lldbg("Audio Channel overrun(cport=%d, %d, %d, %d)!!\n", operation->cport, gb_mixer.rx_rb_count,
+		      info->rx_rb_count, info->next_rx_sample);
+        gb_i2s_report_event(info, GB_I2S_EVENT_OVERRUN);
+        goto err_exit;
+    }
+
+//    lldbg("sample number: current=%d, expected=%d(%x)\n",
+//          le32_to_cpu(request->sample_number), info->next_rx_sample, info->flags);
+
+    /* Fill in any missing data */
+    while (ring_buf_is_producers(info->rx_rb) &&
+           (le32_to_cpu(request->sample_number) > info->next_rx_sample))
+        gb_i2s_ll_tx(info, info->dummy_data);
+
+	gb_i2s_ll_tx(info, request->data);
+    info->rx_packet_count++;
+
+#ifdef USE_THREAD_FOR_I2S_RB
+    if (!(info->flags & GB_I2S_FLAG_RX_STARTED)) {
+    	uint32_t packets_before_start;
+
+    	packets_before_start = (info->sample_frequency * info->delay) /
+                               (info->samples_per_message * 1000000);
+
+//    	lldbg("%d, %d, %d, %d, %d(%x)\n", packets_before_start, info->rx_rb_count,
+//    		  info->sample_frequency, info->delay, info->samples_per_message,
+//			  gb_mixer.flags);
+
+    	if (packets_before_start >= info->rx_packet_count) {
+            goto err_exit;
+    	}
+// lldbg("===%x\n", gb_mixer.flags);
+        info->flags |= GB_I2S_FLAG_RX_STARTED;
+        atomic_inc(&gb_mixer.active_rx_channel_count);
+    }
+
+    if (!(gb_mixer.flags & GB_I2S_FLAG_RX_STARTED) || (gb_mixer.rx_rb_count < 2) || (info->rx_rb_count > 4)) {
+//lldbg("--->\n");
+    	sem_post(&gb_mixer.rx_rb_sem);
+    }
+	sched_yield();
+#else
+#ifdef CONFIG_GREYBUS_I2S_DUAL_PORTS
+    ret = gb_mixer_start_transmitter(GB_I2S_MIX_AUDIO_CHANNELS);
+#else
+    ret = device_i2s_start_transmitter(info->dev);
+#endif
+
+    if (ret) {
+        gb_i2s_report_event(info, GB_I2S_EVENT_FAILURE);
+        gb_i2s_report_event(info, GB_I2S_EVENT_HALT);
+        goto err_exit;
+    }
+
+    info->flags |= GB_I2S_FLAG_RX_STARTED;
+#endif
+
+err_exit:
+    sem_post(&info->active_cports_lock);
+
+    return 0;
+}
+#endif
 
 static int gb_i2s_shutdown_receiver(struct gb_i2s_info *info)
 {
@@ -413,16 +1349,67 @@ static int gb_i2s_shutdown_receiver(struct gb_i2s_info *info)
      * CPort is shutdown.
      */
     if (info->flags & GB_I2S_FLAG_RX_STARTED) {
+#ifndef CONFIG_GREYBUS_I2S_DUAL_PORTS
         device_i2s_stop_transmitter(info->dev);
         info->flags &= ~GB_I2S_FLAG_RX_STARTED;
+#else
+        int channel_id = info->channel_id;
+
+        info->flags &= ~GB_I2S_FLAG_RX_STARTED;
+#ifdef CONFIG_GREYBUS_I2S_UPSCALE
+  		info->stream_handle = NULL;
+#endif
+  		atomic_dec(&gb_mixer.active_rx_channel_count);
+
+  		if (atomic_dec(&gb_mixer.rx_channel_count) == 0)
+        {
+#ifdef USE_THREAD_FOR_I2S_RB
+        	gb_mixer.rx_thread_terminate = 1;
+        	sem_post(&gb_mixer.rx_rb_sem);
+        	sem_wait(&gb_mixer.rx_stop_sem);
+#endif
+        	device_i2s_stop_transmitter(gb_mixer.dev);
+
+        	ring_buf_free_ring(gb_mixer.rx_rb, NULL, NULL);
+
+        	gb_mixer.flags &= ~GB_I2S_FLAG_MIXER_STARTED;
+        	gb_mixer.flags &= ~GB_I2S_FLAG_RX_PREPARED;
+        	gb_mixer.flags &= ~GB_I2S_FLAG_RX_STARTED;
+
+      		lldbg("rbCnt=%d, id=%d, undrun=%d(%d), mixingCnt=%d.\n",
+      			  info->rx_rb_count, info->next_rx_sample, info->rx_rb_underrun_count,
+      			  gb_mixer.rx_rb_underrun_count, info->rx_rb_mixing_count);
+
+      		gb_mixer.rx_rb_count = 0;
+        	gb_mixer.rx_rb_underrun_count = 0;
+        	gb_mixer.rx_rb_total_count = 0;
+        } else {
+      		lldbg("rbCnt=%d, id=%d, undrun=%d(%d), mixingCnt=%d.\n",
+      			  info->rx_rb_count, info->next_rx_sample, info->rx_rb_underrun_count,
+      			  gb_mixer.rx_rb_underrun_count, info->rx_rb_mixing_count);
+        }
+
+        lldbg("closing audio channel %d.\n", channel_id);
+
+    	gb_mixer.audio_channels[channel_id].rx_rb = NULL;
+    	gb_mixer.audio_channels[channel_id].channel_info = NULL;
+
+    	info->rx_rb_mixing_count = 0;
+#endif
     }
 
+#ifndef CONFIG_GREYBUS_I2S_DUAL_PORTS
     device_i2s_shutdown_transmitter(info->dev);
+#else
+    device_i2s_shutdown_transmitter(gb_mixer.dev);
+#endif
 
     ring_buf_free_ring(info->rx_rb, NULL, NULL);
     info->rx_rb = NULL;
     info->rx_rb_count = 0;
     info->next_rx_sample = 0;
+	info->rx_rb_underrun_count = 0;
+    info->rx_packet_count = 0;
 
     info->flags &= ~GB_I2S_FLAG_RX_PREPARED;
 
@@ -436,6 +1423,7 @@ static int gb_i2s_shutdown_receiver(struct gb_i2s_info *info)
  * gb_i2s_tx_delay_timeout()).  The rest will remain on transmitter so
  * receiver isn't overrun.
  */
+#ifndef DISABLE_TRANSMIT
 static void *gb_i2s_tx_rb_thread(void *data)
 {
     struct gb_i2s_info *info = data;
@@ -486,7 +1474,11 @@ static void *gb_i2s_tx_rb_thread(void *data)
         ring_buf_reset(rb);
         ring_buf_pass(rb);
 
+#ifndef CONFIG_GREYBUS_I2S_DUAL_PORTS
         ret = device_i2s_start_receiver(info->dev);
+#else
+        ret = device_i2s_start_receiver(gb_mixer.dev);
+#endif
         if (ret)
             gb_i2s_report_event(info, GB_I2S_EVENT_FAILURE);
 
@@ -497,7 +1489,9 @@ static void *gb_i2s_tx_rb_thread(void *data)
     /* NOTREACHED */
     return NULL;
 }
+#endif
 
+#ifndef DISABLE_TRANSMIT
 /* Callback for low-level i2s receive operations (GB transmits) */
 static void gb_i2s_ll_rx_cb(struct ring_buf *rb,
                             enum device_i2s_event event, void *arg)
@@ -593,9 +1587,11 @@ static void gb_i2s_rb_free_gb_op(struct ring_buf *rb, void *arg)
 {
     gb_operation_destroy(ring_buf_get_priv(rb));
 }
+#endif
 
 static int gb_i2s_prepare_transmitter(struct gb_i2s_info *info)
 {
+#ifndef DISABLE_TRANSMIT
     unsigned int entries;
     int ret;
 
@@ -614,8 +1610,13 @@ static int gb_i2s_prepare_transmitter(struct gb_i2s_info *info)
         return -ENOMEM;
 
     /* Greybus i2s message transmitter is local i2s receiver */
+#ifndef CONFIG_GREYBUS_I2S_DUAL_PORTS
     ret = device_i2s_prepare_receiver(info->dev, info->tx_rb, gb_i2s_ll_rx_cb,
-                                      info);
+    		                          info);
+#else
+    ret = device_i2s_prepare_receiver(gb_mixer.dev, info->tx_rb, gb_i2s_ll_rx_cb,
+    		                          info);
+#endif
     if (ret) {
         ring_buf_free_ring(info->tx_rb, gb_i2s_rb_free_gb_op, info);
         info->tx_rb = NULL;
@@ -624,12 +1625,14 @@ static int gb_i2s_prepare_transmitter(struct gb_i2s_info *info)
     }
 
     info->flags |= GB_I2S_FLAG_TX_PREPARED;
+#endif
 
     return 0;
 }
 
 static int gb_i2s_start_transmitter(struct gb_i2s_info *info)
 {
+#ifndef DISABLE_TRANSMIT
     irqstate_t flags;
     int ret;
 
@@ -649,7 +1652,11 @@ static int gb_i2s_start_transmitter(struct gb_i2s_info *info)
                  gb_i2s_tx_delay_timeout, 1, info);
     }
 
+#ifndef CONFIG_GREYBUS_I2S_DUAL_PORTS
     ret = device_i2s_start_receiver(info->dev);
+#else
+    ret = device_i2s_start_receiver(gb_mixer.dev);
+#endif
     if (ret) {
         if (info->flags & GB_I2S_FLAG_TX_DELAYING) {
             wd_cancel(info->tx_wdog);
@@ -663,11 +1670,14 @@ static int gb_i2s_start_transmitter(struct gb_i2s_info *info)
 
 err_exit:
     irqrestore(flags);
+#endif
+
     return ret;
 }
 
 static int gb_i2s_stop_transmitter(struct gb_i2s_info *info)
 {
+#ifndef DISABLE_TRANSMIT
     irqstate_t flags;
 
     if (!(info->flags & GB_I2S_FLAG_TX_STARTED))
@@ -675,7 +1685,11 @@ static int gb_i2s_stop_transmitter(struct gb_i2s_info *info)
 
     info->flags &= ~GB_I2S_FLAG_TX_STARTED;
 
+#ifndef CONFIG_GREYBUS_I2S_DUAL_PORTS
     device_i2s_stop_receiver(info->dev);
+#else
+    device_i2s_stop_receiver(gb_mixer.dev);
+#endif
 
     flags = irqsave();
 
@@ -686,19 +1700,25 @@ static int gb_i2s_stop_transmitter(struct gb_i2s_info *info)
 
     irqrestore(flags);
 
+#endif
+
     return 0;
 }
 
 static int gb_i2s_shutdown_transmitter(struct gb_i2s_info *info)
 {
+#ifndef DISABLE_TRANSMIT
     if (!(info->flags & GB_I2S_FLAG_TX_PREPARED) ||
         (info->flags & GB_I2S_FLAG_TX_STARTED)) {
 
         return -EPROTO;
     }
 
+#ifndef CONFIG_GREYBUS_I2S_DUAL_PORTS
     device_i2s_shutdown_receiver(info->dev);
-
+#else
+    device_i2s_shutdown_receiver(gb_mixer.dev);
+#endif
     atomic_add(&info->tx_rb_count, -atomic_get(&info->tx_rb_count));
 
     ring_buf_free_ring(info->tx_rb, gb_i2s_rb_free_gb_op, info);
@@ -706,6 +1726,7 @@ static int gb_i2s_shutdown_transmitter(struct gb_i2s_info *info)
     info->next_tx_sample = 0;
 
     info->flags &= ~GB_I2S_FLAG_TX_PREPARED;
+#endif
 
     return 0;
 }
@@ -782,8 +1803,13 @@ static uint8_t gb_i2s_get_supported_configurations_req_handler(
     if (!info)
         return GB_OP_INVALID;
 
+#ifndef CONFIG_GREYBUS_I2S_DUAL_PORTS
     ret = device_i2s_get_supported_configurations(info->dev, &dev_cfg_cnt,
                                                   &dev_cfg);
+#else
+    ret = device_i2s_get_supported_configurations(gb_mixer.dev, &dev_cfg_cnt,
+                                                  &dev_cfg);
+#endif
     if (ret)
         return GB_OP_MALFUNCTION;
 
@@ -821,11 +1847,47 @@ static uint8_t gb_i2s_set_configuration_req_handler(
 
     gb_i2s_copy_cfg_gb2dev(&request->config, &dev_cfg);
 
+#ifndef CONFIG_GREYBUS_I2S_DUAL_PORTS
     ret = device_i2s_set_configuration(info->dev, &dev_cfg);
     if (ret)
         return GB_OP_MALFUNCTION;
 
     info->sample_frequency = request->config.sample_frequency;
+
+#else
+    if (!(gb_mixer.flags & GB_I2S_FLAG_CONFIGURED)) {
+    	memset(&dev_cfg, 0, sizeof(*request));
+        dev_cfg.sample_frequency    = I2S_OUTPUT_SAMPLE_RATE;
+        dev_cfg.num_channels        = NUMBER_OF_AUDIO_CHANNELS;
+        dev_cfg.bytes_per_channel   = DATA_SIZE_PER_SAMPLE;
+        dev_cfg.byte_order          = 4;
+        dev_cfg.pad                 = 0;
+        dev_cfg.spatial_locations   = 3;
+        dev_cfg.ll_protocol         = 2;
+        dev_cfg.ll_mclk_role        = 1;
+        dev_cfg.ll_bclk_role        = 1;
+        dev_cfg.ll_wclk_role        = 1;
+        dev_cfg.ll_wclk_polarity    = 1;
+        dev_cfg.ll_wclk_change_edge = 2; //1;
+        dev_cfg.ll_data_tx_edge     = 1; //2;
+        dev_cfg.ll_data_rx_edge     = 2; //1;
+        dev_cfg.ll_data_offset      = 1;
+
+    	ret = device_i2s_set_configuration(gb_mixer.dev, &dev_cfg);
+
+        if (ret) {
+        	lldbg("failed to set i2s configuration.\n");
+            return GB_OP_MALFUNCTION;
+        }
+
+        gb_i2s_copy_cfg_dev2gb(&dev_cfg, &gb_mixer.config);
+        gb_mixer.flags |= GB_I2S_FLAG_CONFIGURED;
+    }
+
+    // memcpy(&info->config, &gb_mixer.config, sizeof(info->config));
+    // memcpy(&info->config, &request->config, sizeof(info->config));
+    info->sample_frequency = request->config.sample_frequency;
+#endif
     info->sample_size = request->config.num_channels *
                         request->config.bytes_per_channel;
 
@@ -869,7 +1931,11 @@ static uint8_t gb_i2s_get_processing_delay_req_handler(
     if (!response)
         return GB_OP_NO_MEMORY;
 
+#ifndef CONFIG_GREYBUS_I2S_DUAL_PORTS
     ret = device_i2s_get_processing_delay(info->dev, &microseconds);
+#else
+    ret = device_i2s_get_processing_delay(gb_mixer.dev, &microseconds);
+#endif
     if (ret)
         return GB_OP_MALFUNCTION;
 
@@ -1067,7 +2133,12 @@ int gb_i2s_mgmt_init(unsigned int cport)
     struct gb_i2s_info *info;
     int ret;
 
-    dev_info = gb_i2s_get_dev_info(GB_I2S_BUNDLE_0_ID);
+#ifndef CONFIG_GREYBUS_I2S_DUAL_PORTS
+    dev_info = gb_i2s_get_dev_info(GB_I2S_BUNDLE_0_ID); /* XXX */
+#else
+    dev_info = gb_i2s_get_dev_info(get_cport_bundle(cport)); /* XXX */
+#endif
+
     if (!dev_info)
         return -EINVAL;
 
@@ -1080,10 +2151,13 @@ int gb_i2s_mgmt_init(unsigned int cport)
 
     info->mgmt_cport = cport;
     info->samples_per_message = GB_I2S_SAMPLES_PER_MSG_DEFAULT;
+#ifndef DISABLE_TRANSMIT
     info->tx_wdog = wd_create();
+#endif
 
     list_init(&info->cport_list);
     sem_init(&info->active_cports_lock, 0, 1);
+#ifndef DISABLE_TRANSMIT
     sem_init(&info->tx_rb_sem, 0, 0);
     atomic_init(&info->tx_rb_count, 0);
 
@@ -1092,23 +2166,46 @@ int gb_i2s_mgmt_init(unsigned int cport)
         ret = -ret;
         goto err_free_resources;
     }
+#endif
 
+#ifndef CONFIG_ARA_AUDIO_STREAM
+#ifndef CONFIG_GREYBUS_I2S_DUAL_PORTS
     info->dev = device_open(dev_info->dev_type, dev_info->dev_id);
     if (!info->dev) {
+#else
+    if ((atomic_inc(&gb_mixer.total_channel_count) == 1) &&
+    	(gb_mixer.dev == NULL)) {
+        int index;
+
+        for (index = 0; index < MAX_AUDIO_CHANNELS; index++) {
+        	gb_mixer.audio_channels[index].channel_info = NULL;
+        	gb_mixer.audio_channels[index].rx_rb = NULL;
+        }
+
+        gb_mixer.dev = device_open(dev_info->dev_type, dev_info->dev_id);
+    }
+    if (!gb_mixer.dev) {
+#endif
         ret = -EIO;
         goto err_kill_pthread;
     }
+#endif
 
     dev_info->info = info;
 
     return 0;
 
+#ifndef DISABLE_TRANSMIT
+#ifndef CONFIG_ARA_AUDIO_STREAM
 err_kill_pthread:
     pthread_kill(info->tx_rb_thread, SIGKILL);
+#endif
 err_free_resources:
     sem_destroy(&info->tx_rb_sem);
     sem_destroy(&info->active_cports_lock);
     wd_delete(info->tx_wdog);
+#endif
+    sem_destroy(&info->active_cports_lock);
     memset(info, 0, sizeof(*info));
     free(info);
 
@@ -1119,18 +2216,35 @@ void gb_i2s_mgmt_exit(unsigned int cport)
 {
     struct gb_i2s_dev_info *dev_info;
 
+#ifndef CONFIG_GREYBUS_I2S_DUAL_PORTS
+    // KIMMUI: ??? Is this right?
     dev_info = gb_i2s_get_dev_info(cport);
+#else
+    dev_info = gb_i2s_get_dev_info(get_cport_bundle(cport));
+#endif
+
     if (!dev_info && !dev_info->info)
         return;
 
+#ifndef CONFIG_GREYBUS_I2S_DUAL_PORTS
     device_close(dev_info->info->dev);
+#else
+    if ((atomic_dec(&gb_mixer.total_channel_count) == 0) &&
+    	(gb_mixer.dev != NULL)) {
+        device_close(gb_mixer.dev);
+        gb_mixer.dev = NULL;
 
+    }
+#endif
+
+#ifndef DISABLE_TRANSMIT
     pthread_kill(dev_info->info->tx_rb_thread, SIGKILL);
 
     wd_cancel(dev_info->info->tx_wdog);
     sem_destroy(&dev_info->info->tx_rb_sem);
-    sem_destroy(&dev_info->info->active_cports_lock);
     wd_delete(dev_info->info->tx_wdog);
+#endif
+    sem_destroy(&dev_info->info->active_cports_lock);
 
     memset(dev_info->info, 0, sizeof(struct gb_i2s_info));
     free(dev_info->info);
@@ -1174,7 +2288,13 @@ static int gb_i2s_cple_init(unsigned int cport, enum gb_i2s_cport_type type)
     struct gb_i2s_dev_info *dev_info;
     struct gb_i2s_cport_list_entry *cple;
 
-    dev_info = gb_i2s_get_dev_info(GB_I2S_BUNDLE_0_ID);
+#ifndef CONFIG_GREYBUS_I2S_DUAL_PORTS
+    dev_info = gb_i2s_get_dev_info(GB_I2S_BUNDLE_0_ID); /* XXX */
+#else
+    dev_info = gb_i2s_get_dev_info(get_cport_bundle(cport)); /* XXX */
+#endif
+
+    lldbg("cport %d, %x\n", cport, dev_info);
     if (!dev_info || !dev_info->info)
         return -EINVAL;
 
@@ -1218,7 +2338,12 @@ int gb_i2s_receiver_init(unsigned int cport)
     struct gb_i2s_cport_list_entry *cple;
     struct list_head *iter;
 
-    dev_info = gb_i2s_get_dev_info(GB_I2S_BUNDLE_0_ID);
+#ifndef CONFIG_GREYBUS_I2S_DUAL_PORTS
+    dev_info = gb_i2s_get_dev_info(GB_I2S_BUNDLE_0_ID); /* XXX */
+#else
+    dev_info = gb_i2s_get_dev_info(get_cport_bundle(cport)); /* XXX */
+#endif
+
     if (!dev_info || !dev_info->info)
         return -EINVAL;
 
