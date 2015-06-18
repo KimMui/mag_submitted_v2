@@ -55,6 +55,10 @@ ifeq ($(CONFIG_GREYBUS_I2S_PHY),y)
 CSRCS += i2s.c
 endif
 
+ifeq ($(CONFIG_GREYBUS_I2S_UPSCALE),y)
+CSRCS += rescale_pcm.c
+endif
+
 DEPPATH += --dep-path greybus
 VPATH += :greybus
 CFLAGS += ${shell $(INCDIR) $(INCDIROPT) "$(CC)" $(TOPDIR)$(DELIM)drivers$(DELIM)greybus}
