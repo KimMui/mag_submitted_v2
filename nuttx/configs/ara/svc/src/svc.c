@@ -93,10 +93,29 @@ struct svc_interface_device_id {
 #define DEMO_DSI_APB1_CPORT     (16)
 #define DEMO_DSI_APB2_CPORT     (16)
 
+
+#ifdef CONFIG_ARA_DUAL_I2S_PORTS
+#define DEMO_I2S_MGMT_APB1_CPORT_1 (4)
+#define DEMO_I2S_MGMT_APB2_CPORT_1 (9)
+#define DEMO_I2S_RX_APB1_CPORT_1   (5)
+#define DEMO_I2S_RX_APB2_CPORT_1   (10)
+#endif
+
+#ifdef CONFIG_ARA_STREAM_FROM_APB3_TO_APB2
+#define DEV_ID_APB3             (3)
+
+#define DEMO_I2S_MGMT_APB3_CPORT_1 (4)
+#define DEMO_I2S_RX_APB3_CPORT_1   (5)
+#endif
+
+
 /* Interface name to deviceID mapping table */
 static struct svc_interface_device_id devid[] = {
     { "apb1", DEV_ID_APB1 },
     { "apb2", DEV_ID_APB2 },
+#ifdef CONFIG_ARA_STREAM_FROM_APB3_TO_APB2
+    { "apb3", DEV_ID_APB3 },
+#endif
     { "spring4", DEV_ID_SPRING4 },
     { "spring6", DEV_ID_SPRING6 },
 };
@@ -136,6 +155,44 @@ static struct unipro_connection conn[] = {
         .cport_id1  = DEMO_I2S_RX_APB2_CPORT,
         .flags      = CPORT_FLAGS_CSD_N | CPORT_FLAGS_CSV_N
     },
+#ifdef CONFIG_ARA_DUAL_I2S_PORTS
+#ifndef CONFIG_ARA_STREAM_FROM_APB3_TO_APB2
+    // APB1, CPort 4 <-> APB2, CPort 9, for I2S MGMT
+    {
+    	.device_id0 = DEV_ID_APB1,
+		.cport_id0  = DEMO_I2S_MGMT_APB1_CPORT_1,
+		.device_id1 = DEV_ID_APB2,
+		.cport_id1  = DEMO_I2S_MGMT_APB2_CPORT_1,
+        .flags      = CPORT_FLAGS_CSD_N | CPORT_FLAGS_CSV_N
+    },
+    // APB1, CPort 5 <-> APB2, CPort 10, for I2S RX
+    {
+    	.device_id0 = DEV_ID_APB1,
+    	.cport_id0  = DEMO_I2S_RX_APB1_CPORT_1,
+		.device_id1 = DEV_ID_APB2,
+		.cport_id1  = DEMO_I2S_RX_APB2_CPORT_1,
+        .flags      = CPORT_FLAGS_CSD_N | CPORT_FLAGS_CSV_N
+    },
+#else
+    // APB3, CPort 4 <-> APB2, CPort 9, for I2S MGMT
+    {
+		.device_id0 = DEV_ID_APB3,
+		.cport_id0  = DEMO_I2S_MGMT_APB3_CPORT_1,
+		.device_id1 = DEV_ID_APB2,
+		.cport_id1  = DEMO_I2S_MGMT_APB2_CPORT_1,
+        .flags      = CPORT_FLAGS_CSD_N | CPORT_FLAGS_CSV_N
+    },
+    // APB3, CPort 5 <-> APB2, CPort 10, for I2S RX
+    {
+		.device_id0 = DEV_ID_APB3,
+		.cport_id0  = DEMO_I2S_RX_APB3_CPORT_1,
+		.device_id1 = DEV_ID_APB2,
+		.cport_id1  = DEMO_I2S_RX_APB2_CPORT_1,
+        .flags      = CPORT_FLAGS_CSD_N | CPORT_FLAGS_CSV_N
+    },
+#endif
+#endif
+
     // APB1, CPort 16 <-> APB2, CPort 16, for DSI
     {
         .device_id0 = DEV_ID_APB1,
