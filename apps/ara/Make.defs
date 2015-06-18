@@ -1,5 +1,5 @@
 ############################################################################
-# apps/examples/Make.defs
+4# apps/examples/Make.defs
 # Adds selected applications to apps/ build
 #
 #   Copyright (C) 2012 Gregory Nutt. All rights reserved.
@@ -122,3 +122,9 @@ endif
 ifeq ($(CONFIG_ARA_I2S_TEST),y)
 CONFIGURED_APPS += ara/i2s
 endif
+
+
+ifeq ($(CONFIG_ARA_AUDIO_STREAM),y)
+CONFIGURED_APPS += ara/audio_stream
+endif
+

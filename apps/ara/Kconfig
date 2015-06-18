@@ -18,3 +18,5 @@ source "$APPSDIR/ara/bdbpm/Kconfig"
 source "$APPSDIR/ara/springpm/Kconfig"
 source "$APPSDIR/ara/pinshare/Kconfig"
 source "$APPSDIR/ara/i2s/Kconfig"
+source "$APPSDIR/ara/audio_stream/Kconfig"
+
