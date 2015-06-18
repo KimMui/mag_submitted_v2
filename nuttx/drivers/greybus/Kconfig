@@ -27,3 +27,15 @@ config GREYBUS_I2S_PHY
 	select DEVICE_CORE
 	select LIB_RING_BUF
 	default n
+	
+	
+config GREYBUS_I2S_UPSCALE
+	bool "I2S upscale support"
+	depends on GREYBUS_I2S_PHY
+	default n
+		
+config GREYBUS_I2S_DUAL_PORTS
+    bool "I2S dual port support"
+	depends on GREYBUS_I2S_PHY
+	default n
+
