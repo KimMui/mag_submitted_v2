@@ -413,7 +413,7 @@ int audio_stream_main(int argc, char *argv[])
     if (ret)
     	return 0;
 
-    ret = set_start_delay(I2S_START_DELAY);
+    ret = set_start_delay(start_delay);
     if (ret)
     	return 0;
 
