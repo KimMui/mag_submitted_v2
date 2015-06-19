@@ -62,6 +62,6 @@ id = 10
 protocol = 0x12
 
 ; Bundle 1
-[bundle-descriptor "1"]
-id = 1
-class = 0x00
+;[bundle-descriptor "1"]
+;id = 1
+;class = 0x00
