@@ -12,4 +12,11 @@ config APB1
 	---help---
 		Select if you are building for APB1 on the BDB.
 
+config GREYBUS_I2S_DUAL_PORTS
+	bool "Dual I2S routing to APB2"
+	select GREYBUS_I2S_UPSCALE
+	default n
+	---help---
+        Enable the dual I2S CPorts on APB2.
+
 endif
