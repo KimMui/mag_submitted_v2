@@ -730,6 +730,7 @@ CONFIG_MM_REGIONS=2
 # Audio Support
 #
 # CONFIG_AUDIO is not set
+CONFIG_ARA_DUAL_I2S_PORTS=y
 
 #
 # Binary Formats
